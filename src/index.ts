@@ -3,9 +3,9 @@
 // exists, else the bundled data/facts.db. The prompt primary key keeps facts
 // unique, so nothing here dedupes.
 //
-// Nothing is held in memory either. Each turn runs one indexed query: a random
-// rowid, then the first matching row at or after it. Rows after a gap in the
-// rowids come up slightly more often, which no one can see on a spinner.
+// Nothing is held in memory either. Each turn runs one query for one row, at a
+// random offset. Rowids are not usable for the random pick: deletes leave gaps,
+// and one row after a wide gap would then win almost every turn.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import fs from "node:fs";
@@ -34,12 +34,9 @@ export function open(env: NodeJS.ProcessEnv = process.env) {
 	const args = [Number.parseInt(env.PI_KV_FACTS_WIDTH ?? "", 10) || WIDTH, ...topics];
 	try {
 		const db = new DatabaseSync(env.PI_KV_FACTS_DB || (fs.existsSync(USER_DB) ? USER_DB : BUNDLED_DB), { readOnly: true });
-		const { n, top } = db.prepare(`SELECT count(*) n, max(rowid) top FROM facts WHERE ${fits}`).get(...args) as {
-			n: number;
-			top: number | null;
-		};
-		const query = db.prepare(`SELECT prompt, answer FROM facts WHERE ${fits} AND rowid >= ? ORDER BY rowid LIMIT 1`);
-		const next = () => (query.get(...args, 1 + rand(top ?? 1)) ?? query.get(...args, 0)) as Fact | undefined;
+		const { n } = db.prepare(`SELECT count(*) n FROM facts WHERE ${fits}`).get(...args) as { n: number };
+		const query = db.prepare(`SELECT prompt, answer FROM facts WHERE ${fits} LIMIT 1 OFFSET ?`);
+		const next = () => (query.get(...args, rand(n)) ?? query.get(...args, 0)) as Fact | undefined;
 		return { count: n, close: () => db.close(), next };
 	} catch {
 		return { count: 0, close: () => {}, next: (): Fact | undefined => undefined };

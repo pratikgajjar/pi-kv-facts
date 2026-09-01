@@ -52,6 +52,18 @@ test("blank and oversized rows never appear", () => {
 	assert.ok(out.every((f) => f?.prompt === "Page load budget" && f.answer === "200 ms"));
 });
 
+test("sparse rowids do not skew the pick", () => {
+	// Deletes leave gaps. A rowid-based pick would return 'c' almost every turn.
+	const file = make(
+		"sparse.db",
+		"CREATE TABLE facts (prompt TEXT PRIMARY KEY, answer TEXT)",
+		"INSERT INTO facts (rowid, prompt, answer) VALUES (1, 'a', '1'), (500, 'b', '2'), (900, 'c', '3')",
+	);
+	const { count, out } = draw({ PI_KV_FACTS_DB: file }, 90);
+	assert.equal(count, 3);
+	assert.equal(new Set(out.map((f) => f?.prompt)).size, 3, "every row must come up");
+});
+
 test("width and topics narrow the selection", () => {
 	const file = make(
 		"topics.db",
