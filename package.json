@@ -1,0 +1,58 @@
+{
+	"name": "pi-kv-facts",
+	"version": "0.1.0",
+	"description": "pi extension: rotate short key/value facts on the working spinner. Ships a napkin-math dataset; point it at any facts you like",
+	"type": "module",
+	"license": "MIT",
+	"author": "pratikgajjar",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/pratikgajjar/pi-kv-facts.git"
+	},
+	"homepage": "https://github.com/pratikgajjar/pi-kv-facts#readme",
+	"bugs": {
+		"url": "https://github.com/pratikgajjar/pi-kv-facts/issues"
+	},
+	"keywords": [
+		"pi",
+		"pi-package",
+		"pi-extension",
+		"coding-agent",
+		"spinner",
+		"flashcards",
+		"napkin-math",
+		"latency",
+		"system-design"
+	],
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"files": [
+		"src",
+		"data",
+		"scripts",
+		"README.md",
+		"LICENSE"
+	],
+	"pi": {
+		"extensions": [
+			"./src/index.ts"
+		]
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"scripts": {
+		"test": "node --test test/*.test.ts",
+		"typecheck": "tsc --noEmit",
+		"build": "node scripts/facts.mjs build",
+		"check": "npm run typecheck && npm test && node scripts/facts.mjs check"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	},
+	"devDependencies": {
+		"@types/node": "^22.0.0",
+		"typescript": "^5.6.0"
+	}
+}
