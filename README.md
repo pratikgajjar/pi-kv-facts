@@ -93,6 +93,16 @@ npm install
 npm run check   # typecheck and tests
 ```
 
+## Release
+
+One command. The tag is the version of record; `package.json` carries a placeholder.
+
+```bash
+git tag v0.1.1 && git push origin v0.1.1
+```
+
+The tag starts two workflows: `release.yml` writes the GitHub release with generated notes, and `publish-npm.yml` publishes to npm through OIDC trusted publishing, with no token in the repository. Both skip their work when the release or the version already exists, so a re-run stays green.
+
 ## License
 
 MIT
