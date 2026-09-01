@@ -1,57 +1,38 @@
 // pi-kv-facts — show one short (prompt, answer) fact per turn on the pi
-// working spinner. The bundled dataset is napkin math; any facts work.
+// working spinner. The bundled facts are napkin math; any facts work.
 //
-// Sources, in priority order: PI_KV_FACTS_JSON, PI_KV_FACTS_DB,
-// ~/.pi/kv-facts/facts.{json,db}, then data/napkin-math.json.
+// Databases, in priority order: PI_KV_FACTS_DB, ~/.pi/kv-facts/facts.db, then
+// the bundled data/facts.db. The first database to define a prompt wins.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface Fact {
-	topic?: string;
 	prompt: string;
 	answer: string;
-	source?: string;
+	topic?: string;
 }
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const DEFAULT_DATASET = path.join(HERE, "..", "data", "napkin-math.json");
-export const USER_DIR = path.join(os.homedir(), ".pi", "kv-facts");
+export const BUNDLED_DB = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "data", "facts.db");
+export const USER_DB = path.join(os.homedir(), ".pi", "kv-facts", "facts.db");
 export const WIDTH = 56;
 
-/** Keep well-formed facts only. Anything else is dropped, never thrown. */
-export function clean(input: unknown): Fact[] {
-	const str = (v: unknown) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim() : "");
-	return (Array.isArray(input) ? input : []).flatMap((f: Fact) => {
-		const [prompt, answer] = [str(f?.prompt), str(f?.answer)];
-		return prompt && answer ? [{ topic: str(f?.topic) || "other", prompt, answer }] : [];
-	});
-}
-
-/** Facts from a JSON file: a bare array or `{ facts: [...] }`. */
-export function readJson(file: string): Fact[] {
-	try {
-		const raw = JSON.parse(fs.readFileSync(file, "utf8"));
-		return clean(Array.isArray(raw) ? raw : raw?.facts);
-	} catch {
-		return [];
-	}
-}
-
-/** Facts from a SQLite table `facts(prompt, answer)`. */
+/** Facts from a SQLite table `facts(prompt, answer[, topic])`. */
 export function readDb(file: string, table = "facts"): Fact[] {
 	if (!/^[A-Za-z_]\w*$/.test(table)) return [];
 	try {
 		const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 		const db = new DatabaseSync(file, { readOnly: true });
-		// SELECT * so both facts(prompt, answer) and a table with topic work.
 		const rows = db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all();
 		db.close();
-		return clean(rows);
+		const str = (v: unknown) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim() : "");
+		return rows.flatMap((r: Record<string, unknown>) => {
+			const [prompt, answer] = [str(r.prompt), str(r.answer)];
+			return prompt && answer ? [{ prompt, answer, topic: str(r.topic) || "other" }] : [];
+		});
 	} catch {
 		return [];
 	}
@@ -77,36 +58,33 @@ export function pick(facts: Fact[], width = WIDTH, seed = 1): Fact[] {
 	return out;
 }
 
-/** Every configured source, user facts first, filtered by topic. */
+/** Every configured database, then the topic filter. */
 export function load(env: NodeJS.ProcessEnv = process.env): Fact[] {
-	const files = (v: string | undefined, fallback: string) => [...(v?.split(":").filter(Boolean) ?? []), fallback];
-	const facts = [
-		...files(env.PI_KV_FACTS_JSON, path.join(USER_DIR, "facts.json")).flatMap(readJson),
-		...files(env.PI_KV_FACTS_DB, path.join(USER_DIR, "facts.db")).flatMap((f) => readDb(f)),
-		...(env.PI_KV_FACTS_BUNDLED === "off" ? [] : readJson(env.PI_KV_FACTS_DATASET || DEFAULT_DATASET)),
-	];
-	const topics = (env.PI_KV_FACTS_TOPICS ?? "").split(/[,\s]+/).filter(Boolean).map((t) => t.toLowerCase());
+	const files = [...(env.PI_KV_FACTS_DB?.split(":").filter(Boolean) ?? []), USER_DB];
+	if (env.PI_KV_FACTS_BUNDLED !== "off") files.push(BUNDLED_DB);
+	const facts = files.flatMap((f) => readDb(f));
+	const topics = (env.PI_KV_FACTS_TOPICS ?? "")
+		.split(/[,\s]+/)
+		.filter(Boolean)
+		.map((t) => t.toLowerCase());
 	return topics.length ? facts.filter((f) => topics.includes((f.topic ?? "").toLowerCase())) : facts;
 }
 
 // The loader prints the message through theme.fg("muted", …). A leading SGR
 // escape wins, because terminals honor the last one set.
-const COLORS = ["#c6ff00", "#d97757", "#635bff", "#1d9bf0", "#e1306c", "#e50914", "#fbbc05", "#1db954"].map(
-	(hex) => `\x1b[38;2;${Number.parseInt(hex.slice(1, 3), 16)};${Number.parseInt(hex.slice(3, 5), 16)};${Number.parseInt(hex.slice(5, 7), 16)}m`,
-);
+const COLORS = ["198;255;0", "217;119;87", "99;91;255", "29;155;240", "225;48;108", "229;9;20", "251;188;5", "29;185;84"];
 
 export default function (pi: ExtensionAPI) {
 	const env = process.env;
 	if (env.PI_KV_FACTS_SPINNER === "off") return;
-	const width = Number.parseInt(env.PI_KV_FACTS_WIDTH ?? "", 10) || WIDTH;
-	const facts = pick(load(env), width, Date.now());
+	const facts = pick(load(env), Number.parseInt(env.PI_KV_FACTS_WIDTH ?? "", 10) || WIDTH, Date.now());
 	if (!facts.length) return;
 	let cursor = 0;
 
 	pi.on("turn_start", async (_event, ctx) => {
 		const i = cursor++;
 		const text = line(facts[i % facts.length] as Fact);
-		ctx.ui.setWorkingMessage(env.PI_KV_FACTS_COLOR === "off" ? text : `${COLORS[i % COLORS.length]}${text}\x1b[0m`);
+		ctx.ui.setWorkingMessage(env.PI_KV_FACTS_COLOR === "off" ? text : `\x1b[38;2;${COLORS[i % COLORS.length]}m${text}\x1b[0m`);
 	});
 
 	pi.on("turn_end", async (_event, ctx) => ctx.ui.setWorkingMessage());

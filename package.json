@@ -45,8 +45,7 @@
 	"scripts": {
 		"test": "node --test test/*.test.ts",
 		"typecheck": "tsc --noEmit",
-		"build": "node scripts/facts.mjs build",
-		"check": "npm run typecheck && npm test && node scripts/facts.mjs check"
+		"check": "npm run typecheck && npm test"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*"
