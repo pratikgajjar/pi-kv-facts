@@ -36,7 +36,8 @@
 	"pi": {
 		"extensions": [
 			"./src/index.ts"
-		]
+		],
+		"image": "https://raw.githubusercontent.com/pratikgajjar/pi-kv-facts/main/assets/spinner.png"
 	},
 	"publishConfig": {
 		"access": "public"

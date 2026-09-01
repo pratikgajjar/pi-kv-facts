@@ -2,6 +2,8 @@
 
 A [pi](https://pi.dev) extension that shows one short fact per turn on the working spinner, while the agent thinks.
 
+![the spinner line under a finished command](assets/spinner.png)
+
 A fact is a `(prompt, answer)` row in SQLite. The bundled database holds napkin math — latency, throughput, cloud cost, powers of two — but any facts work: your service SLOs, deploy times, API limits.
 
 ```
