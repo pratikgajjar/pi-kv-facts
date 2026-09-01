@@ -1,14 +1,11 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
-import { BUNDLED_DB, line, load, pick, readDb, WIDTH } from "../src/index.ts";
+import { BUNDLED_DB, line, open, WIDTH } from "../src/index.ts";
 
-const bundled = readDb(BUNDLED_DB);
-const script = path.join(import.meta.dirname, "..", "scripts", "facts.mjs");
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kv-facts-"));
 after(() => fs.rmSync(dir, { recursive: true, force: true }));
 
@@ -21,63 +18,71 @@ function make(name: string, ...sql: string[]): string {
 	return file;
 }
 
-test("the bundled database loads and every line fits the spinner", () => {
-	assert.ok(bundled.length >= 80, `only ${bundled.length} facts`);
-	assert.equal(pick(bundled).length, bundled.length);
-	assert.ok(bundled.every((f) => [...line(f)].length <= WIDTH));
-	assert.ok(new Set(bundled.map((f) => f.topic)).size > 5);
+/** `count` calls to next(), which is random. */
+function draw(env: Record<string, string>, count = 60) {
+	const facts = open(env as NodeJS.ProcessEnv);
+	const out = Array.from({ length: count }, () => facts.next());
+	facts.close();
+	return { count: facts.count, out };
+}
+
+test("the bundled database serves facts that fit the spinner", () => {
+	const { count, out } = draw({ PI_KV_FACTS_DB: BUNDLED_DB });
+	assert.ok(count >= 80, `only ${count} facts`);
+	assert.ok(out.every((f) => f && [...line(f)].length <= WIDTH));
+	assert.ok(new Set(out.map((f) => f?.prompt)).size > 10, "next() repeats itself");
 });
 
-test("a missing or unsafe database returns nothing, never throws", () => {
-	assert.deepEqual(readDb("/nope/none.db"), []);
-	assert.deepEqual(readDb(BUNDLED_DB, "facts; DROP TABLE facts"), []);
+test("a missing or damaged database serves nothing, never throws", () => {
+	for (const file of ["/nope/none.db", make("empty.db", "CREATE TABLE other (x TEXT)")]) {
+		const { count, out } = draw({ PI_KV_FACTS_DB: file }, 3);
+		assert.equal(count, 0);
+		assert.deepEqual(out, [undefined, undefined, undefined]);
+	}
 });
 
-test("a plain facts(prompt, answer) table works, blank answers drop out", () => {
+test("blank and oversized rows never appear", () => {
 	const file = make(
 		"plain.db",
 		"CREATE TABLE facts (prompt TEXT PRIMARY KEY, answer TEXT)",
-		"INSERT INTO facts VALUES ('Page load budget', ' 200  ms '), ('No answer', '')",
+		`INSERT INTO facts VALUES ('Page load budget', '200 ms'), ('Blank', ''), ('Long', '${"x".repeat(WIDTH)}')`,
 	);
-	assert.deepEqual(readDb(file), [{ prompt: "Page load budget", answer: "200 ms", topic: "other" }]);
+	const { count, out } = draw({ PI_KV_FACTS_DB: file });
+	assert.equal(count, 1);
+	assert.ok(out.every((f) => f?.prompt === "Page load budget" && f.answer === "200 ms"));
 });
 
-test("pick dedupes by prompt, drops long lines, and shuffles by seed", () => {
-	const dupes = [
-		{ prompt: "System call", answer: "300 ns" },
-		{ prompt: "system CALL", answer: "1 ns" },
-	];
-	assert.deepEqual(pick(dupes), [dupes[0]]);
-	assert.ok(pick(bundled, 20).every((f) => [...line(f)].length <= 20));
-	assert.deepEqual(pick(bundled, WIDTH, 42), pick(bundled, WIDTH, 42));
-	assert.notDeepEqual(pick(bundled, WIDTH, 42), pick(bundled, WIDTH, 43));
-});
-
-test("an earlier database wins, topics filter, bundled facts can be dropped", () => {
+test("width and topics narrow the selection", () => {
 	const file = make(
-		"mine.db",
+		"topics.db",
 		"CREATE TABLE facts (prompt TEXT PRIMARY KEY, answer TEXT, topic TEXT)",
-		"INSERT INTO facts VALUES ('1 CPU per month', '$99', 'cost')",
+		"INSERT INTO facts VALUES ('1 CPU per month', '$15', 'cost'), ('System call', '300 ns', 'cpu')",
 	);
-	const facts = pick(load({ PI_KV_FACTS_DB: file, PI_KV_FACTS_TOPICS: "cost" } as NodeJS.ProcessEnv));
-	assert.ok(facts.every((f) => f.topic === "cost"));
-	assert.equal(facts.find((f) => f.prompt === "1 CPU per month")?.answer, "$99");
-	const own = load({ PI_KV_FACTS_DB: file, PI_KV_FACTS_BUNDLED: "off" } as NodeJS.ProcessEnv);
-	assert.ok(own.some((f) => f.prompt === "1 CPU per month"));
-	assert.ok(!own.some((f) => f.prompt === "Internet egress, 1 GB"));
+	assert.ok(draw({ PI_KV_FACTS_DB: file, PI_KV_FACTS_TOPICS: "COST" }).out.every((f) => f?.answer === "$15"));
+	assert.equal(draw({ PI_KV_FACTS_DB: file, PI_KV_FACTS_WIDTH: "20" }).count, 1);
+	assert.equal(draw({ PI_KV_FACTS_DB: file, PI_KV_FACTS_TOPICS: "nothing" }).count, 0);
 });
 
-test("the utility creates, adds, lists, and removes", () => {
-	const file = path.join(dir, "new.db");
-	const run = (...args: string[]) =>
-		execFileSync("node", [script, ...args], { env: { ...process.env, FACTS_DB: file }, encoding: "utf8" });
+test("an insert with sqlite lands on the spinner", () => {
+	const file = make("written.db", "CREATE TABLE facts (prompt TEXT PRIMARY KEY, answer TEXT NOT NULL, topic TEXT)");
+	const db = new DatabaseSync(file);
+	db.exec("INSERT INTO facts VALUES ('Deploy to production', '6 min', 'team')");
+	db.exec("INSERT OR REPLACE INTO facts VALUES ('Deploy to production', '4 min', 'team')");
+	db.close();
+	const { count, out } = draw({ PI_KV_FACTS_DB: file });
+	assert.equal(count, 1, "the primary key keeps one row per prompt");
+	assert.ok(out.every((f) => f?.answer === "4 min"));
+});
 
-	run("add", "Deploy to production", "6 min", "team");
-	assert.deepEqual(readDb(file), [{ prompt: "Deploy to production", answer: "6 min", topic: "team" }]);
-	assert.match(run("list", "deploy"), /1 of 1 facts/);
-	assert.throws(() => run("add", "Deploy to production", "again"), /UNIQUE|constraint/);
-	assert.throws(() => run("add", "No answer"), /usage: add/);
-	assert.throws(() => run("rm", "Nothing here"), /no such prompt/);
-	run("rm", "Deploy to production");
-	assert.deepEqual(readDb(file), []);
+test("the extension registers turn handlers and clears the line", async () => {
+	const { default: install } = await import("../src/index.ts");
+	const handlers: Record<string, (e: unknown, c: unknown) => Promise<void>> = {};
+	const shown: (string | undefined)[] = [];
+	const ctx = { ui: { setWorkingMessage: (m?: string) => shown.push(m) } };
+	install({ on: (name: string, fn: never) => (handlers[name] = fn) } as never);
+
+	await handlers.turn_start?.({}, ctx);
+	await handlers.turn_end?.({}, ctx);
+	assert.match(String(shown[0]), /·/);
+	assert.equal(shown[1], undefined);
 });
